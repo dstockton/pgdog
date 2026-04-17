@@ -70,6 +70,9 @@ pub enum Error {
     #[error("sharding key updates are forbidden")]
     ShardingKeyUpdateForbidden,
 
+    #[error("database quota exceeded: {0}")]
+    QuotaExceeded(String),
+
     // FIXME: layer errors better so we don't have
     // to reach so deep into a module.
     #[error("{0}")]

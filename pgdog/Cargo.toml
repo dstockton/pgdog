@@ -69,6 +69,8 @@ dashmap = "6"
 derive_builder = "0.20.2"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-rds = { version = "1", default-features = false }
+tokio-postgres = "0.7"
+tokio-postgres-rustls = "0.13"
 pgdog-config = { path = "../pgdog-config" }
 pgdog-vector = { path = "../pgdog-vector" }
 pgdog-stats = { path = "../pgdog-stats" }

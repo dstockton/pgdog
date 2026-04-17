@@ -317,6 +317,29 @@ impl ServerCertVerifier for AllowAllVerifier {
     }
 }
 
+/// Get rustls ClientConfig for the specified verification mode.
+/// Used by the quota monitor to build tokio-postgres TLS connections.
+pub fn client_config_for_verify_mode(
+    mode: TlsVerifyMode,
+    ca_cert_path: Option<&PathBuf>,
+) -> Result<Arc<ClientConfig>, Error> {
+    let config_key = ConnectorConfigKey::new(mode, ca_cert_path);
+
+    if let Some(entry) = CONNECTOR.load_full() {
+        if entry.key == config_key {
+            return Ok(entry.config.clone());
+        }
+    }
+
+    let client_config = build_connector(&config_key)?;
+    CONNECTOR.store(Some(ConnectorCacheEntry::new(
+        config_key,
+        client_config.clone(),
+    )));
+
+    Ok(client_config)
+}
+
 /// Create a TLS connector with the specified verification mode.
 pub fn connector_with_verify_mode(
     mode: TlsVerifyMode,

@@ -191,6 +191,11 @@ pub struct Database {
     /// Used for weighted load balancing.
     #[serde(default = "Database::lb_weight")]
     pub lb_weight: u8,
+    /// Maximum database size in bytes. When the database exceeds this limit,
+    /// write queries are blocked (reads and shrink operations like DELETE/TRUNCATE/DROP
+    /// remain allowed). Set to 0 or omit to disable quota enforcement.
+    #[serde(default)]
+    pub max_db_size: Option<u64>,
 }
 
 impl Database {

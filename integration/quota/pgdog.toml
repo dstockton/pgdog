@@ -1,0 +1,34 @@
+[general]
+host = "0.0.0.0"
+port = 6432
+workers = 2
+default_pool_size = 5
+# Poll every 5 seconds for faster test iteration.
+quota_poll_interval = 5000
+# Enable OpenMetrics on port 9930 for metrics tests.
+openmetrics_port = 9930
+# Short server lifetime for fast pool rotation in tests.
+server_lifetime = 5000
+idle_timeout = 3000
+
+# tenant_a: 20MB quota — above PG baseline (~8MB) + VACUUM residue (~10MB after test data).
+[[databases]]
+name = "tenant_a"
+host = "tenant_a"
+port = 5432
+role = "primary"
+database_name = "tenant_a"
+user = "postgres"
+password = "postgres"
+max_db_size = 20971520
+
+# tenant_b: large quota (100MB) — should never be exceeded.
+[[databases]]
+name = "tenant_b"
+host = "tenant_b"
+port = 5432
+role = "primary"
+database_name = "tenant_b"
+user = "postgres"
+password = "postgres"
+max_db_size = 104857600

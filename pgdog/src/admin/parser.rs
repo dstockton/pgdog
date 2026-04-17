@@ -44,6 +44,7 @@ pub enum ParseResult {
     ShowTasks(ShowTasks),
     StopTask(StopTask),
     Cutover(Cutover),
+    ShowQuotas(ShowQuotas),
 }
 
 impl ParseResult {
@@ -90,6 +91,7 @@ impl ParseResult {
             ShowTasks(cmd) => cmd.execute().await,
             StopTask(cmd) => cmd.execute().await,
             Cutover(cmd) => cmd.execute().await,
+            ShowQuotas(cmd) => cmd.execute().await,
         }
     }
 
@@ -136,6 +138,7 @@ impl ParseResult {
             ShowTasks(cmd) => cmd.name(),
             StopTask(cmd) => cmd.name(),
             Cutover(cmd) => cmd.name(),
+            ShowQuotas(cmd) => cmd.name(),
         }
     }
 }
@@ -191,6 +194,7 @@ impl Parser {
                 "schema_sync" => ParseResult::ShowSchemaSync(ShowSchemaSync::parse(&sql)?),
                 "table_copies" => ParseResult::ShowTableCopies(ShowTableCopies::parse(&sql)?),
                 "tasks" => ParseResult::ShowTasks(ShowTasks::parse(&sql)?),
+                "quotas" => ParseResult::ShowQuotas(ShowQuotas::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -263,6 +267,18 @@ mod tests {
     fn parses_show_client_memory_command() {
         let result = Parser::parse("SHOW CLIENT MEMORY;");
         assert!(matches!(result, Ok(ParseResult::ShowClientMemory(_))));
+    }
+
+    #[test]
+    fn parses_show_quotas_command() {
+        let result = Parser::parse("SHOW QUOTAS;");
+        assert!(matches!(result, Ok(ParseResult::ShowQuotas(_))));
+    }
+
+    #[test]
+    fn parses_show_quotas_lowercase() {
+        let result = Parser::parse("show quotas");
+        assert!(matches!(result, Ok(ParseResult::ShowQuotas(_))));
     }
 
     #[test]

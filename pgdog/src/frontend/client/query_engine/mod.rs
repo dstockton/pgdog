@@ -133,7 +133,41 @@ impl QueryEngine {
             return Ok(());
         }
 
-        self.hooks.before_execution(context)?;
+        match self.hooks.before_execution(context) {
+            Err(Error::QuotaExceeded(msg)) => {
+                let error = crate::net::ErrorResponse {
+                    severity: "ERROR".into(),
+                    code: "53400".into(), // configuration_limit_exceeded
+                    message: msg,
+                    detail: Some(
+                        "Database size quota exceeded. Writes are blocked. \
+                         DELETE, TRUNCATE, DROP, and VACUUM are still allowed."
+                            .into(),
+                    ),
+                    ..Default::default()
+                };
+
+                // If we're in a transaction, transition to error state so
+                // subsequent statements are rejected until ROLLBACK.
+                use crate::frontend::client::TransactionType;
+                if let Some(txn) = context.transaction {
+                    context.transaction = Some(match txn {
+                        TransactionType::ReadOnly => TransactionType::ErrorReadOnly,
+                        TransactionType::ReadWrite => TransactionType::ErrorReadWrite,
+                        other => other, // already in error state
+                    });
+                }
+
+                context
+                    .stream
+                    .error(error, context.in_transaction())
+                    .await?;
+                self.update_stats(context);
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+            Ok(()) => {}
+        }
 
         // Queue up request to mirrors, if any.
         // Do this before sending query to actual server

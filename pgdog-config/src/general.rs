@@ -713,6 +713,13 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#cutover_save_config
     #[serde(default)]
     pub cutover_save_config: bool,
+
+    /// How often (in milliseconds) the quota monitor checks database sizes.
+    /// Only relevant when at least one database has `max_db_size` configured.
+    ///
+    /// _Default:_ `60000` (60 seconds)
+    #[serde(default = "General::quota_poll_interval")]
+    pub quota_poll_interval: u64,
 }
 
 impl Default for General {
@@ -809,6 +816,7 @@ impl Default for General {
             cutover_timeout_action: Self::cutover_timeout_action(),
             cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
+            quota_poll_interval: Self::quota_poll_interval(),
         }
     }
 }
@@ -889,6 +897,10 @@ impl General {
 
     fn healthcheck_port() -> Option<u16> {
         Self::env_option("PGDOG_HEALTHCHECK_PORT")
+    }
+
+    fn quota_poll_interval() -> u64 {
+        Self::env_or_default("PGDOG_QUOTA_POLL_INTERVAL", 60_000)
     }
 
     pub fn regex_parser_limit() -> usize {

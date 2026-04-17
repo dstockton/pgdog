@@ -1,0 +1,70 @@
+services:
+  pgdog:
+    image: quota-pgdog:latest
+    volumes:
+      - ./pgdog.toml:/pgdog/pgdog.toml
+      - ./users.toml:/pgdog/users.toml
+    ports:
+      - "16432:6432"
+    networks:
+      - quota_test
+    environment:
+      RUST_LOG: info,pgdog::quota=debug
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=admin psql -h 127.0.0.1 -p 6432 -U admin -d admin -c 'SHOW VERSION' >/dev/null 2>&1 || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+    depends_on:
+      tenant_a:
+        condition: service_healthy
+      tenant_b:
+        condition: service_healthy
+
+  tenant_a:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: tenant_a
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql
+    networks:
+      - quota_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  tenant_b:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: tenant_b
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./setup.sql:/docker-entrypoint-initdb.d/setup.sql
+    networks:
+      - quota_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  test:
+    image: postgres:17
+    volumes:
+      - ./test_quota.py:/test/test_quota.py
+    networks:
+      - quota_test
+    depends_on:
+      pgdog:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq python3 >/dev/null 2>&1 && python3 /test/test_quota.py"
+
+networks:
+  quota_test:

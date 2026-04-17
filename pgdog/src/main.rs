@@ -143,6 +143,9 @@ async fn pgdog(command: Option<Commands>) -> Result<(), Box<dyn std::error::Erro
         DnsCache::global().start_refresh_loop();
     }
 
+    // Start the database size quota monitor if any database has max_db_size configured.
+    pgdog::quota::spawn_monitor();
+
     let stats_logger = stats::StatsLogger::new();
     prepared_statements::start_maintenance();
 

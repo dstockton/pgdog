@@ -1,0 +1,13 @@
+[[users]]
+name = "postgres"
+database = "tenant_a"
+password = "postgres"
+
+[[users]]
+name = "postgres"
+database = "tenant_b"
+password = "postgres"
+
+[admin]
+name = "admin"
+password = "admin"

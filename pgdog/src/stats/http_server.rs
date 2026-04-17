@@ -11,6 +11,47 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use super::{Clients, MirrorStatsMetrics, Pools, QueryCache, TwoPc};
+use crate::quota;
+
+pub fn quota_metrics() -> String {
+    let statuses = quota::all_quota_statuses();
+    if statuses.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str("# HELP pgdog_db_size_bytes Current database size in bytes\n");
+    out.push_str("# TYPE pgdog_db_size_bytes gauge\n");
+    for s in &statuses {
+        out.push_str(&format!(
+            "pgdog_db_size_bytes{{database=\"{}\"}} {}\n",
+            s.database, s.current_size
+        ));
+    }
+
+    out.push_str("# HELP pgdog_db_size_limit_bytes Configured maximum database size in bytes\n");
+    out.push_str("# TYPE pgdog_db_size_limit_bytes gauge\n");
+    for s in &statuses {
+        out.push_str(&format!(
+            "pgdog_db_size_limit_bytes{{database=\"{}\"}} {}\n",
+            s.database, s.max_size
+        ));
+    }
+
+    out.push_str(
+        "# HELP pgdog_db_over_limit Whether the database exceeds its size quota (1=over, 0=ok)\n",
+    );
+    out.push_str("# TYPE pgdog_db_over_limit gauge\n");
+    for s in &statuses {
+        out.push_str(&format!(
+            "pgdog_db_over_limit{{database=\"{}\"}} {}\n",
+            s.database,
+            if s.over_limit { 1 } else { 0 }
+        ));
+    }
+
+    out
+}
 
 async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     let clients = Clients::load();
@@ -27,6 +68,7 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         .collect();
     let query_cache = query_cache.join("\n");
     let two_pc = TwoPc::load();
+    let quota = quota_metrics();
     let metrics_data = clients.to_string()
         + "\n"
         + &pools.to_string()
@@ -35,7 +77,9 @@ async fn metrics(_: Request<hyper::body::Incoming>) -> Result<Response<Full<Byte
         + "\n"
         + &query_cache
         + "\n"
-        + &two_pc.to_string();
+        + &two_pc.to_string()
+        + "\n"
+        + &quota;
     let response = Response::builder()
         .header(
             hyper::header::CONTENT_TYPE,
