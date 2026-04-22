@@ -45,6 +45,8 @@ pub enum ParseResult {
     StopTask(StopTask),
     Cutover(Cutover),
     ShowQuotas(ShowQuotas),
+    SetQuota(SetQuota),
+    ResetQuota(ResetQuota),
 }
 
 impl ParseResult {
@@ -92,6 +94,8 @@ impl ParseResult {
             StopTask(cmd) => cmd.execute().await,
             Cutover(cmd) => cmd.execute().await,
             ShowQuotas(cmd) => cmd.execute().await,
+            SetQuota(cmd) => cmd.execute().await,
+            ResetQuota(cmd) => cmd.execute().await,
         }
     }
 
@@ -139,6 +143,8 @@ impl ParseResult {
             StopTask(cmd) => cmd.name(),
             Cutover(cmd) => cmd.name(),
             ShowQuotas(cmd) => cmd.name(),
+            SetQuota(cmd) => cmd.name(),
+            ResetQuota(cmd) => cmd.name(),
         }
     }
 }
@@ -203,6 +209,7 @@ impl Parser {
             "reset" => match iter.next().ok_or(Error::Syntax)?.trim() {
                 "prepared" => ParseResult::ResetPrepared(ResetPrepared::parse(&sql)?),
                 "query_cache" => ParseResult::ResetQueryCache(ResetQueryCache::parse(&sql)?),
+                "quota" => ParseResult::ResetQuota(ResetQuota::parse(&sql)?),
                 command => {
                     debug!("unknown admin show command: '{}'", command);
                     return Err(Error::Syntax);
@@ -226,7 +233,10 @@ impl Parser {
             // TODO: This is not ready yet. We have a race and
             // also the changed settings need to be propagated
             // into the pools.
-            "set" => ParseResult::Set(Set::parse(&sql)?),
+            "set" => match iter.next().map(|s| s.trim()).unwrap_or("") {
+                "quota" => ParseResult::SetQuota(SetQuota::parse(&sql)?),
+                _ => ParseResult::Set(Set::parse(&sql)?),
+            },
             command => {
                 debug!("unknown admin command: {}", command);
                 return Err(Error::Syntax);
@@ -285,5 +295,25 @@ mod tests {
     fn parses_cutover_command() {
         let result = Parser::parse("CUTOVER");
         assert!(matches!(result, Ok(ParseResult::Cutover(_))));
+    }
+
+    #[test]
+    fn parses_set_quota_command() {
+        let result = Parser::parse("SET QUOTA tenant_a 1073741824;");
+        assert!(matches!(result, Ok(ParseResult::SetQuota(_))));
+    }
+
+    #[test]
+    fn parses_reset_quota_command() {
+        let result = Parser::parse("RESET QUOTA tenant_a");
+        assert!(matches!(result, Ok(ParseResult::ResetQuota(_))));
+    }
+
+    #[test]
+    fn set_quota_does_not_shadow_generic_set() {
+        // `SET query_timeout = 5000` must still reach the generic Set parser,
+        // not the quota dispatch.
+        let result = Parser::parse("SET query_timeout TO 5000");
+        assert!(matches!(result, Ok(ParseResult::Set(_))));
     }
 }

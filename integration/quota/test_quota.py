@@ -54,7 +54,13 @@ def psql(database, sql, user="postgres", expect_error=False):
 
 
 def psql_admin(sql):
-    """Run SQL on admin database."""
+    """Run SQL on admin database.
+
+    Uses -t -A (tuple-only, unaligned) so output is pipe-separated with
+    no header or padding. Rows look like `tenant_a|0|1000000|f`, which
+    lets callers use `line.startswith("tenant_a")` and `line.split('|')`
+    without whitespace gymnastics.
+    """
     env = {"PGPASSWORD": "admin"}
     result = subprocess.run(
         [
@@ -65,6 +71,8 @@ def psql_admin(sql):
             "-d", "admin",
             "-c", sql,
             "--no-psqlrc",
+            "-t",
+            "-A",
         ],
         capture_output=True,
         text=True,
@@ -236,6 +244,82 @@ def test_show_quotas_admin():
         fail("show_quotas_admin", f"expected tenant_a and tenant_b in output: {stdout}")
 
 
+def test_set_quota_override():
+    """SET QUOTA overrides the configured max_db_size at runtime;
+    RESET QUOTA reverts to the config value. SHOW QUOTAS reflects both."""
+    original_max = None
+    stdout, _, rc = psql_admin("SHOW QUOTAS")
+    if rc != 0:
+        fail("set_quota_override", "SHOW QUOTAS failed before override")
+        return
+    for line in stdout.splitlines():
+        if line.startswith("tenant_b"):
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                try:
+                    original_max = int(parts[2])
+                except ValueError:
+                    pass
+
+    # Override tenant_b to a small value.
+    stdout, stderr, rc = psql_admin("SET QUOTA tenant_b 1048576")
+    if rc != 0:
+        fail("set_quota_override", f"SET QUOTA failed: {stderr}")
+        return
+
+    # Wait for the next monitor cycle to apply the override.
+    wait_for_quota_poll(8)
+
+    stdout, _, rc = psql_admin("SHOW QUOTAS")
+    if rc != 0:
+        fail("set_quota_override", "SHOW QUOTAS failed after override")
+        return
+    applied = False
+    for line in stdout.splitlines():
+        if line.startswith("tenant_b"):
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3 and parts[2] == "1048576":
+                applied = True
+    if not applied:
+        fail("set_quota_override", f"override not reflected in SHOW QUOTAS: {stdout}")
+        return
+
+    # Reset the override.
+    stdout, stderr, rc = psql_admin("RESET QUOTA tenant_b")
+    if rc != 0:
+        fail("set_quota_override", f"RESET QUOTA failed: {stderr}")
+        return
+
+    wait_for_quota_poll(8)
+    stdout, _, rc = psql_admin("SHOW QUOTAS")
+    reverted = False
+    for line in stdout.splitlines():
+        if line.startswith("tenant_b"):
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 3:
+                try:
+                    if int(parts[2]) == original_max:
+                        reverted = True
+                except ValueError:
+                    pass
+    if reverted:
+        ok("set_quota_override")
+    else:
+        fail("set_quota_override", f"RESET did not revert to {original_max}: {stdout}")
+
+
+def test_set_quota_rejects_unknown_database():
+    """SET QUOTA on an unknown database must error, not silently succeed."""
+    _, stderr, rc = psql_admin("SET QUOTA no_such_tenant 1000")
+    if rc != 0 and "unknown database" in stderr.lower():
+        ok("set_quota_rejects_unknown_database")
+    else:
+        fail(
+            "set_quota_rejects_unknown_database",
+            f"expected UnknownDatabase error, got rc={rc} stderr={stderr}",
+        )
+
+
 def test_metrics_include_quotas():
     """OpenMetrics endpoint should include quota gauges."""
     try:
@@ -347,6 +431,8 @@ def main():
     # Phase 5: Admin + Metrics.
     print("\n--- Phase 5: Admin & Metrics ---")
     test_show_quotas_admin()
+    test_set_quota_override()
+    test_set_quota_rejects_unknown_database()
     test_metrics_include_quotas()
 
     # Phase 6: Recovery.

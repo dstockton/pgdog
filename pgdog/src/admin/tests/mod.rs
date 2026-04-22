@@ -4,6 +4,8 @@ use crate::backend::pool::mirror_stats::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};
 
+use super::error::Error as AdminError;
+use super::quota_override::{ResetQuota, SetQuota};
 use super::show_client_memory::ShowClientMemory;
 use super::show_config::ShowConfig;
 use super::show_lists::ShowLists;
@@ -409,6 +411,221 @@ async fn show_server_memory_reports_memory_stats() {
         let field = row_description.field(idx).expect("field should exist");
         assert_eq!(field.data_type(), *expected_type);
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_applies_override_for_configured_database() {
+    let context = TestAdminContext::new();
+
+    // Use a unique tenant name to avoid cross-test interference on
+    // the global QUOTA_OVERRIDES map.
+    let tenant = "admin_test_set_quota_tenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: tenant.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(10_000_000),
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+
+    context.set_config(config);
+
+    let cmd = SetQuota::parse(&format!("set quota {} 2147483648", tenant))
+        .expect("set quota should parse");
+    cmd.execute().await.expect("set quota should execute");
+
+    assert_eq!(
+        crate::quota::quota_override(tenant),
+        Some(2_147_483_648u64),
+        "override should be recorded under the case-preserved config name"
+    );
+
+    // Clean up the override so it does not leak between tests.
+    crate::quota::clear_quota_override(tenant);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reset_quota_clears_override() {
+    let context = TestAdminContext::new();
+    let tenant = "admin_test_reset_quota_tenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: tenant.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(10_000_000),
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+
+    context.set_config(config);
+
+    crate::quota::set_quota_override(tenant, 999);
+    assert_eq!(crate::quota::quota_override(tenant), Some(999));
+
+    let cmd = ResetQuota::parse(&format!("reset quota {}", tenant))
+        .expect("reset quota should parse");
+    cmd.execute().await.expect("reset quota should execute");
+
+    assert_eq!(crate::quota::quota_override(tenant), None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_rejects_unknown_database() {
+    let context = TestAdminContext::new();
+
+    // Fresh empty config — nothing to match.
+    let config = ConfigAndUsers::default();
+    context.set_config(config);
+
+    let cmd = SetQuota::parse("set quota does_not_exist 1000").unwrap();
+    match cmd.execute().await {
+        Err(AdminError::UnknownDatabase(name)) => {
+            assert_eq!(name, "does_not_exist");
+        }
+        Err(e) => panic!("expected UnknownDatabase, got: {}", e),
+        Ok(_) => panic!("expected error, got Ok"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_rejects_database_without_max_db_size() {
+    let context = TestAdminContext::new();
+    let tenant = "admin_test_no_quota_tenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: tenant.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        // Intentionally no max_db_size — monitor ignores this db.
+        max_db_size: None,
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    let cmd = SetQuota::parse(&format!("set quota {} 1000", tenant)).unwrap();
+    match cmd.execute().await {
+        Err(AdminError::QuotaNotConfigured(name)) => {
+            assert_eq!(name, tenant);
+        }
+        Err(e) => panic!("expected QuotaNotConfigured, got: {}", e),
+        Ok(_) => panic!("expected error, got Ok"),
+    }
+    assert_eq!(crate::quota::quota_override(tenant), None);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_matches_database_case_insensitively() {
+    let context = TestAdminContext::new();
+    // Mixed-case config name; user supplies all lowercase (parser lowercases).
+    let tenant_config = "AdminTestMixedCaseTenant";
+    let tenant_request = "admintestmixedcasetenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: tenant_config.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(10_000_000),
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant_config.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    let cmd = SetQuota::parse(&format!("set quota {} 500", tenant_request)).unwrap();
+    cmd.execute().await.expect("case-insensitive lookup");
+
+    // Override must be stored under the config case, which is what
+    // `quota::monitor_loop` keys by when applying overrides.
+    assert_eq!(
+        crate::quota::quota_override(tenant_config),
+        Some(500),
+        "override must be keyed by the config-case database name"
+    );
+    assert_eq!(
+        crate::quota::quota_override(tenant_request),
+        None,
+        "override must not be keyed by the lowercased user input"
+    );
+
+    crate::quota::clear_quota_override(tenant_config);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_rejects_ambiguous_case_distinct_names() {
+    let context = TestAdminContext::new();
+    let name_upper = "AdminTestAmbig";
+    let name_lower = "admintestambig";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.databases.push(Database {
+        name: name_upper.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(1_000),
+        ..Default::default()
+    });
+    config.config.databases.push(Database {
+        name: name_lower.into(),
+        host: "127.0.0.2".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(2_000),
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: name_upper.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    // Parser lowercases; both configured entries match ci. Must error
+    // rather than silently pick one.
+    let cmd = SetQuota::parse(&format!("set quota {} 500", name_lower)).unwrap();
+    match cmd.execute().await {
+        Err(AdminError::AmbiguousDatabase(requested, names)) => {
+            assert_eq!(requested, name_lower);
+            assert!(names.contains(name_upper));
+            assert!(names.contains(name_lower));
+        }
+        Err(e) => panic!("expected AmbiguousDatabase, got: {}", e),
+        Ok(_) => panic!("expected error, got Ok"),
+    }
+    assert_eq!(crate::quota::quota_override(name_upper), None);
+    assert_eq!(crate::quota::quota_override(name_lower), None);
 }
 
 #[tokio::test(flavor = "current_thread")]

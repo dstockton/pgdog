@@ -37,6 +37,15 @@ pub enum Error {
     #[error("address is not valid")]
     InvalidAddress,
 
+    #[error("unknown database: {0}")]
+    UnknownDatabase(String),
+
+    #[error("database '{0}' has no max_db_size configured")]
+    QuotaNotConfigured(String),
+
+    #[error("ambiguous database name '{0}' matches multiple configured entries (case-distinct): {1}")]
+    AmbiguousDatabase(String, String),
+
     #[error("{0}")]
     Replication(Box<crate::backend::replication::logical::Error>),
 }

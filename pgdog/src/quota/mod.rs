@@ -2,8 +2,15 @@
 //!
 //! Monitors database sizes and blocks write queries when a database
 //! exceeds its configured `max_db_size` limit. Shrink operations
-//! (DELETE, TRUNCATE, DROP, VACUUM) remain allowed so tenants can
-//! reduce usage.
+//! (DELETE, TRUNCATE, VACUUM, and `DropStmt` variants such as
+//! DROP TABLE / INDEX / SCHEMA) remain allowed so tenants can reduce
+//! usage. Admin-level statements like DROP DATABASE (`DropdbStmt`)
+//! are not exempt — see `classify::is_shrink_operation`.
+//!
+//! Runtime overrides are exposed via the admin `SET QUOTA <db> <bytes>`
+//! and `RESET QUOTA <db>` commands (see `admin::quota_override`). They
+//! persist across monitor poll cycles but are lost on restart; change
+//! `max_db_size` in `pgdog.toml` + `RELOAD` for persistent updates.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -61,10 +68,17 @@ pub fn all_quota_statuses() -> Vec<QuotaStatus> {
 }
 
 /// Override quota limit at runtime (persists across poll cycles).
+///
+/// The `QUOTA_OVERRIDES` mutex is held across the `QUOTA_STATE` store
+/// to serialize with `monitor_loop`, which also acquires the same
+/// mutex at its terminal store. Without this, an override landing
+/// mid-cycle could be silently overwritten by the monitor's
+/// from-scratch state rebuild for up to one poll interval.
 pub fn set_quota_override(database: &str, max_size: u64) {
-    QUOTA_OVERRIDES.lock().insert(database.to_string(), max_size);
+    let mut overrides = QUOTA_OVERRIDES.lock();
+    overrides.insert(database.to_string(), max_size);
 
-    // Also update current state immediately so the change is visible.
+    // Update current state immediately so the change is visible.
     let mut state = (**QUOTA_STATE.load()).clone();
     if let Some(status) = state.get_mut(database) {
         status.max_size = max_size;
@@ -73,9 +87,39 @@ pub fn set_quota_override(database: &str, max_size: u64) {
     }
 }
 
-/// Clear a runtime override, reverting to config value.
+/// Clear a runtime override, reverting to config value. If the
+/// database has an entry in `QUOTA_STATE`, its `max_size` /
+/// `over_limit` are updated immediately so `SHOW QUOTAS` reflects
+/// the revert without waiting for the next monitor poll. Symmetric
+/// with `set_quota_override`; holds `QUOTA_OVERRIDES` across the
+/// state mutation so `monitor_loop` can't race-overwrite the revert.
 pub fn clear_quota_override(database: &str) {
-    QUOTA_OVERRIDES.lock().remove(database);
+    let mut overrides = QUOTA_OVERRIDES.lock();
+    overrides.remove(database);
+
+    // Look up the config value to snap QUOTA_STATE back in place.
+    let cfg = config();
+    let config_max = cfg
+        .config
+        .databases
+        .iter()
+        .find(|db| db.name == database)
+        .and_then(|db| db.max_db_size);
+
+    if let Some(max_size) = config_max {
+        let mut state = (**QUOTA_STATE.load()).clone();
+        if let Some(status) = state.get_mut(database) {
+            status.max_size = max_size;
+            status.over_limit = status.current_size > max_size;
+            QUOTA_STATE.store(Arc::new(state));
+        }
+    }
+}
+
+/// Read the current runtime override for a database, if any.
+/// Returns `None` when no override has been set (config value applies).
+pub fn quota_override(database: &str) -> Option<u64> {
+    QUOTA_OVERRIDES.lock().get(database).copied()
 }
 
 /// Collected quota configs from the database configuration.
@@ -294,7 +338,23 @@ async fn monitor_loop(interval: Duration) {
             }
         }
 
-        QUOTA_STATE.store(Arc::new(new_state));
+        // Re-apply overrides under the QUOTA_OVERRIDES lock before
+        // committing new_state. Any SET QUOTA / RESET QUOTA that
+        // landed while we were doing network I/O is visible here
+        // because `set_quota_override` / `clear_quota_override` hold
+        // the same mutex across their own QUOTA_STATE store. Without
+        // this step, a late override would be silently reverted for
+        // the remainder of the cycle when we commit below.
+        {
+            let overrides_now = QUOTA_OVERRIDES.lock();
+            for (db, &effective_max) in overrides_now.iter() {
+                if let Some(status) = new_state.get_mut(db) {
+                    status.max_size = effective_max;
+                    status.over_limit = status.current_size > effective_max;
+                }
+            }
+            QUOTA_STATE.store(Arc::new(new_state));
+        }
         tokio::time::sleep(interval).await;
     }
 }

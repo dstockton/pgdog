@@ -244,6 +244,73 @@ fn test_quota_override_persists() {
 }
 
 #[test]
+fn test_clear_override_snaps_state_back_to_config() {
+    // When config has a max_db_size for the database, clear_quota_override
+    // must update QUOTA_STATE in place so SHOW QUOTAS sees the revert
+    // immediately (symmetric with set_quota_override).
+    let db = make_db("clear_revert_db", "127.0.0.1", Some(500_000));
+    let user = pgdog_config::User {
+        name: "alice".into(),
+        database: "clear_revert_db".into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    };
+    let cfg = make_config_with_databases(vec![db], vec![user]);
+
+    with_config_and_clean_state(cfg, || {
+        let mut state = HashMap::new();
+        state.insert(
+            "clear_revert_db".to_string(),
+            QuotaStatus {
+                database: "clear_revert_db".to_string(),
+                current_size: 300_000,
+                max_size: 500_000,
+                over_limit: false,
+            },
+        );
+        QUOTA_STATE.store(Arc::new(state));
+
+        // Override lowers the limit below current size.
+        set_quota_override("clear_revert_db", 100_000);
+        let after_set = quota_status("clear_revert_db").unwrap();
+        assert_eq!(after_set.max_size, 100_000);
+        assert!(after_set.over_limit);
+
+        // Clearing must snap back to the config value immediately.
+        clear_quota_override("clear_revert_db");
+        let after_clear = quota_status("clear_revert_db").unwrap();
+        assert_eq!(after_clear.max_size, 500_000);
+        assert!(!after_clear.over_limit);
+        assert!(QUOTA_OVERRIDES.lock().get("clear_revert_db").is_none());
+    });
+}
+
+#[test]
+fn test_clear_override_no_config_is_noop_on_state() {
+    // If no config entry matches (or no max_db_size), clearing should
+    // just drop the override — state is untouched, since we have no
+    // config value to revert to. Documents the existing behavior.
+    with_clean_state(|| {
+        set_quota_override("no_config_db", 777);
+        clear_quota_override("no_config_db");
+        assert!(QUOTA_OVERRIDES.lock().get("no_config_db").is_none());
+    });
+}
+
+#[test]
+fn test_quota_override_getter() {
+    // Public `quota_override` reads what was inserted and returns
+    // None after clear.
+    with_clean_state(|| {
+        assert_eq!(quota_override("getter_db"), None);
+        set_quota_override("getter_db", 123);
+        assert_eq!(quota_override("getter_db"), Some(123));
+        clear_quota_override("getter_db");
+        assert_eq!(quota_override("getter_db"), None);
+    });
+}
+
+#[test]
 fn test_override_for_unknown_db_stores_but_doesnt_crash() {
     with_clean_state(|| {
         set_quota_override("phantom_db", 999);
