@@ -6,13 +6,10 @@
 use super::*;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-
-// Serialize all tests that touch global quota state or config.
-static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+use crate::test_lock::GLOBAL_TEST_LOCK;
 
 fn with_clean_state<F: FnOnce()>(f: F) {
-    let _guard = TEST_LOCK.lock();
+    let _guard = GLOBAL_TEST_LOCK.lock();
     let prev_state = QUOTA_STATE.load().clone();
     let prev_overrides = QUOTA_OVERRIDES.lock().clone();
     f();
@@ -21,7 +18,7 @@ fn with_clean_state<F: FnOnce()>(f: F) {
 }
 
 fn with_config_and_clean_state<F: FnOnce()>(cfg: pgdog_config::ConfigAndUsers, f: F) {
-    let _guard = TEST_LOCK.lock();
+    let _guard = GLOBAL_TEST_LOCK.lock();
     let prev_config = crate::config::config().clone();
     let prev_state = QUOTA_STATE.load().clone();
     let prev_overrides = QUOTA_OVERRIDES.lock().clone();
@@ -578,8 +575,18 @@ fn test_collect_targets_skips_zero_quota() {
 fn test_collect_targets_prefers_primary() {
     let cfg = make_config_with_databases(
         vec![
-            make_db_with_role("mydb", "replica1", pgdog_config::Role::Replica, Some(1_000_000)),
-            make_db_with_role("mydb", "primary1", pgdog_config::Role::Primary, Some(1_000_000)),
+            make_db_with_role(
+                "mydb",
+                "replica1",
+                pgdog_config::Role::Replica,
+                Some(1_000_000),
+            ),
+            make_db_with_role(
+                "mydb",
+                "primary1",
+                pgdog_config::Role::Primary,
+                Some(1_000_000),
+            ),
         ],
         vec![make_user("app", "pw")],
     );
@@ -632,10 +639,7 @@ fn test_collect_targets_sorted_user_fallback() {
     // With no db.user, collect_targets picks the first user alphabetically.
     let cfg = make_config_with_databases(
         vec![make_db("mydb", "pg1", Some(1_000_000))],
-        vec![
-            make_user("zoe", "zoe_pw"),
-            make_user("alice", "alice_pw"),
-        ],
+        vec![make_user("zoe", "zoe_pw"), make_user("alice", "alice_pw")],
     );
     with_config_and_clean_state(cfg, || {
         let targets = collect_targets();

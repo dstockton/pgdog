@@ -20,6 +20,19 @@ pub mod tui;
 pub mod unique_id;
 pub mod util;
 
+#[cfg(test)]
+pub(crate) mod test_lock {
+    use once_cell::sync::Lazy;
+    use parking_lot::Mutex;
+
+    /// Single global lock shared by all unit tests that mutate process-wide
+    /// state (live config, databases registry, quota state). Tests in
+    /// different modules race on `crate::config::set` and the quota
+    /// singletons; serializing them through one mutex keeps them isolated
+    /// regardless of which test module they live in.
+    pub(crate) static GLOBAL_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+}
+
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 

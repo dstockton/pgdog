@@ -43,7 +43,9 @@ pub enum Error {
     #[error("database '{0}' has no max_db_size configured")]
     QuotaNotConfigured(String),
 
-    #[error("ambiguous database name '{0}' matches multiple configured entries (case-distinct): {1}")]
+    #[error(
+        "ambiguous database name '{0}' matches multiple configured entries (case-distinct): {1}"
+    )]
     AmbiguousDatabase(String, String),
 
     #[error("{0}")]

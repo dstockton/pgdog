@@ -4,6 +4,8 @@ use crate::backend::pool::mirror_stats::Counts;
 use crate::config::{self, ConfigAndUsers, Database, Role, User as ConfigUser};
 use crate::net::messages::{DataRow, DataType, FromBytes, Protocol, RowDescription};
 
+use parking_lot::MutexGuard;
+
 use super::error::Error as AdminError;
 use super::quota_override::{ResetQuota, SetQuota};
 use super::show_client_memory::ShowClientMemory;
@@ -12,6 +14,7 @@ use super::show_lists::ShowLists;
 use super::show_mirrors::ShowMirrors;
 use super::show_pools::ShowPools;
 use super::show_server_memory::ShowServerMemory;
+use crate::test_lock::GLOBAL_TEST_LOCK;
 
 #[derive(Clone)]
 struct SavedState {
@@ -22,15 +25,18 @@ struct SavedState {
 /// Minimal harness to snapshot and restore admin singletons touched by SHOW commands.
 pub(crate) struct TestAdminContext {
     original: SavedState,
+    _guard: MutexGuard<'static, ()>,
 }
 
 impl TestAdminContext {
     pub(crate) fn new() -> Self {
+        let guard = GLOBAL_TEST_LOCK.lock();
         let config = (*config::config()).clone();
         let databases = (*databases()).clone();
 
         Self {
             original: SavedState { config, databases },
+            _guard: guard,
         }
     }
 
@@ -479,8 +485,8 @@ async fn reset_quota_clears_override() {
     crate::quota::set_quota_override(tenant, 999);
     assert_eq!(crate::quota::quota_override(tenant), Some(999));
 
-    let cmd = ResetQuota::parse(&format!("reset quota {}", tenant))
-        .expect("reset quota should parse");
+    let cmd =
+        ResetQuota::parse(&format!("reset quota {}", tenant)).expect("reset quota should parse");
     cmd.execute().await.expect("reset quota should execute");
 
     assert_eq!(crate::quota::quota_override(tenant), None);

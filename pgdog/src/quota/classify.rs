@@ -54,9 +54,10 @@ pub fn is_data_write(ast: &Ast) -> bool {
 pub fn is_copy_from(ast: &Ast) -> bool {
     let stmts = &ast.parse_result().protobuf.stmts;
     stmts.iter().any(|raw_stmt| {
-        raw_stmt.stmt.as_ref().map_or(false, |s| {
-            matches!(&s.node, Some(NodeEnum::CopyStmt(copy)) if copy.is_from)
-        })
+        raw_stmt.stmt.as_ref().map_or(
+            false,
+            |s| matches!(&s.node, Some(NodeEnum::CopyStmt(copy)) if copy.is_from),
+        )
     })
 }
 

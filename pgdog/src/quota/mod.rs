@@ -210,11 +210,10 @@ fn collect_targets() -> Vec<QuotaTarget> {
         }
 
         let pg_database_name = db.database_name.clone().unwrap_or_else(|| db.name.clone());
-        let user = db.user.clone().unwrap_or_else(|| {
-            first_user
-                .clone()
-                .unwrap_or_else(|| "postgres".to_string())
-        });
+        let user = db
+            .user
+            .clone()
+            .unwrap_or_else(|| first_user.clone().unwrap_or_else(|| "postgres".to_string()));
         let password = db
             .password
             .clone()
