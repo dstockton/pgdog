@@ -3037,6 +3037,7 @@ dependencies = [
  "derive_more",
  "fnv",
  "futures",
+ "hex",
  "hickory-resolver",
  "http-body-util",
  "hyper",
