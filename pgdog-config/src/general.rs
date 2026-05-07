@@ -720,6 +720,16 @@ pub struct General {
     /// _Default:_ `60000` (60 seconds)
     #[serde(default = "General::quota_poll_interval")]
     pub quota_poll_interval: u64,
+
+    /// Default maximum database size in bytes applied to every database that
+    /// does not set its own `max_db_size`. A per-database `max_db_size`
+    /// always wins, including a value of `0`, which explicitly disables
+    /// enforcement for that database. Set to `0` or omit to leave databases
+    /// without an explicit limit unbounded.
+    ///
+    /// _Default:_ unset (no global limit)
+    #[serde(default)]
+    pub default_max_db_size: Option<u64>,
 }
 
 impl Default for General {
@@ -817,6 +827,7 @@ impl Default for General {
             cutover_save_config: bool::default(),
             unique_id_function: Self::unique_id_function(),
             quota_poll_interval: Self::quota_poll_interval(),
+            default_max_db_size: Self::default_max_db_size(),
         }
     }
 }
@@ -901,6 +912,10 @@ impl General {
 
     fn quota_poll_interval() -> u64 {
         Self::env_or_default("PGDOG_QUOTA_POLL_INTERVAL", 60_000)
+    }
+
+    fn default_max_db_size() -> Option<u64> {
+        Self::env_option("PGDOG_DEFAULT_MAX_DB_SIZE")
     }
 
     pub fn regex_parser_limit() -> usize {

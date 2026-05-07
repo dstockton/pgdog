@@ -193,7 +193,10 @@ pub struct Database {
     pub lb_weight: u8,
     /// Maximum database size in bytes. When the database exceeds this limit,
     /// write queries are blocked (reads and shrink operations like DELETE/TRUNCATE/DROP
-    /// remain allowed). Set to 0 or omit to disable quota enforcement.
+    /// remain allowed). Set to `0` to explicitly disable enforcement for this
+    /// database (overriding any `default_max_db_size` set in `[general]`).
+    /// Omit to inherit `general.default_max_db_size`; if neither is set,
+    /// quota enforcement is disabled.
     #[serde(default)]
     pub max_db_size: Option<u64>,
 }

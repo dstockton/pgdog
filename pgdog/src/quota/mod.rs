@@ -98,13 +98,20 @@ pub fn clear_quota_override(database: &str) {
     overrides.remove(database);
 
     // Look up the config value to snap QUOTA_STATE back in place.
+    // Mirrors collect_targets's effective-limit resolution: per-db
+    // max_db_size wins (Some(0) means explicit disable → revert is a
+    // no-op), otherwise fall back to general.default_max_db_size.
     let cfg = config();
     let config_max = cfg
         .config
         .databases
         .iter()
         .find(|db| db.name == database)
-        .and_then(|db| db.max_db_size);
+        .and_then(|db| match db.max_db_size {
+            Some(0) => None,
+            Some(s) => Some(s),
+            None => cfg.config.general.default_max_db_size.filter(|&s| s > 0),
+        });
 
     if let Some(max_size) = config_max {
         let mut state = (**QUOTA_STATE.load()).clone();
@@ -195,10 +202,16 @@ fn collect_targets() -> Vec<QuotaTarget> {
     // Group databases by name — only check the primary for size.
     let mut seen = std::collections::HashSet::new();
 
+    let general_default = cfg.config.general.default_max_db_size;
+
     for db in &cfg.config.databases {
         let max_size = match db.max_db_size {
-            Some(s) if s > 0 => s,
-            _ => continue,
+            Some(0) => continue, // explicit per-db disable
+            Some(s) => s,
+            None => match general_default {
+                Some(s) if s > 0 => s,
+                _ => continue,
+            },
         };
 
         if !seen.insert(db.name.clone()) {

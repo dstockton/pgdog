@@ -31,7 +31,10 @@ Record each `<set-per-tenant>` password — you will paste them into `users.toml
 
 ## 2. Size the quota
 
-Pick one number applied to every tenant. No global default exists; the `max_db_size` field is per-database.
+Pick one number applied to every tenant. Either set `default_max_db_size` in
+`[general]` (inherited by every database without its own `max_db_size`) or
+repeat the value on each `[[databases]]` block. A per-database value of `0`
+explicitly disables enforcement and overrides the default.
 
 ```
 max_db_size_bytes = floor( addon_storage_gb * 1024^3 * 0.80 / num_tenants )
@@ -46,7 +49,8 @@ python3 -c "print(int($ADDON_GB * 1024**3 * 0.80 / $TENANTS))"
 # 1073741824   (example: 1 GiB)
 ```
 
-Use that integer for every `max_db_size` below.
+Use that integer for `default_max_db_size` in `[general]`, or for every
+`max_db_size` below.
 
 ## 3. `pgdog.toml`
 
@@ -58,9 +62,14 @@ workers = 2
 default_pool_size = 10
 # Quota monitor cadence. 60s default; lower only if tenants push writes hard.
 quota_poll_interval = 60000
+# Inherited by every [[databases]] entry that does not set its own
+# max_db_size. Per-db values still win; a per-db value of 0 explicitly
+# opts that database out.
+default_max_db_size = 1073741824   # 1 GiB
 openmetrics_port = 9930
 
 # Replicate this block per tenant. Only `name` / `database_name` change.
+# `max_db_size` is omitted so each tenant inherits `default_max_db_size`.
 [[databases]]
 name            = "tenant_a"
 host            = "<addon-host>"
@@ -69,7 +78,6 @@ role            = "primary"
 database_name   = "tenant_a"
 user            = "tenant_a_app"
 password        = "<tenant_a password>"
-max_db_size     = 1073741824   # 1 GiB — same for every tenant
 
 [[databases]]
 name            = "tenant_b"
@@ -79,7 +87,6 @@ role            = "primary"
 database_name   = "tenant_b"
 user            = "tenant_b_app"
 password        = "<tenant_b password>"
-max_db_size     = 1073741824
 ```
 
 ## 4. `users.toml`
@@ -209,12 +216,12 @@ curl http://<pgdog-service>:9930/metrics | grep pgdog_db_
 #   pgdog_db_over_limit{database="tenant_a"} 0|1
 ```
 
-`SET QUOTA` requires that the target database already has a non-zero `max_db_size` in `pgdog.toml` — databases without a configured quota are not polled by the monitor, so an override on them has no effect. The command rejects those up front. Override changes take effect on the next monitor poll cycle (up to `quota_poll_interval` ms); they do not retroactively unblock server-level read-only flips until the monitor next reconciles.
+`SET QUOTA` requires that the target database already be polled by the monitor — i.e. it has a non-zero `max_db_size` in `pgdog.toml`, or it inherits a non-zero `default_max_db_size` from `[general]`. Databases without an effective quota are not polled, so an override on them has no effect; the command rejects those up front. Override changes take effect on the next monitor poll cycle (up to `quota_poll_interval` ms); they do not retroactively unblock server-level read-only flips until the monitor next reconciles.
 
 ## Adding a tenant
 
 1. Create DB + role on the addon (step 1).
-2. Append `[[databases]]` block to `pgdog.toml` with the same `max_db_size`.
+2. Append `[[databases]]` block to `pgdog.toml`. Omit `max_db_size` to inherit `default_max_db_size`, or set it explicitly per-tenant.
 3. Append `[[users]]` to `users.toml`.
 4. Redeploy the PgDog service (config is loaded at start; a rolling restart re-reads both files).
 5. Deploy a new Directus service using the creds from step 3.

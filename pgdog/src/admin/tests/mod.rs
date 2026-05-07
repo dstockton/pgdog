@@ -545,6 +545,76 @@ async fn set_quota_rejects_database_without_max_db_size() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn set_quota_accepts_database_inheriting_general_default() {
+    // db has no max_db_size of its own but inherits a non-zero
+    // general.default_max_db_size; the monitor polls it, so SET QUOTA
+    // must succeed instead of returning QuotaNotConfigured.
+    let context = TestAdminContext::new();
+    let tenant = "admin_test_inherits_default_tenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.default_max_db_size = Some(2_000_000);
+    config.config.databases.push(Database {
+        name: tenant.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: None,
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    let cmd = SetQuota::parse(&format!("set quota {} 1000", tenant)).unwrap();
+    cmd.execute()
+        .await
+        .expect("override on inherited-default db should succeed");
+    assert_eq!(crate::quota::quota_override(tenant), Some(1_000));
+
+    crate::quota::clear_quota_override(tenant);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_quota_rejects_database_with_explicit_zero_even_with_general_default() {
+    // Per-db max_db_size = 0 is an explicit opt-out; the monitor
+    // skips the database, so overrides must still be rejected even if
+    // a general default is set.
+    let context = TestAdminContext::new();
+    let tenant = "admin_test_explicit_optout_tenant";
+
+    let mut config = ConfigAndUsers::default();
+    config.config.general.default_max_db_size = Some(2_000_000);
+    config.config.databases.push(Database {
+        name: tenant.into(),
+        host: "127.0.0.1".into(),
+        role: Role::Primary,
+        shard: 0,
+        max_db_size: Some(0),
+        ..Default::default()
+    });
+    config.users.users.push(ConfigUser {
+        name: "alice".into(),
+        database: tenant.into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    });
+    context.set_config(config);
+
+    let cmd = SetQuota::parse(&format!("set quota {} 1000", tenant)).unwrap();
+    match cmd.execute().await {
+        Err(AdminError::QuotaNotConfigured(name)) => assert_eq!(name, tenant),
+        Err(e) => panic!("expected QuotaNotConfigured, got: {}", e),
+        Ok(_) => panic!("expected error, got Ok"),
+    }
+    assert_eq!(crate::quota::quota_override(tenant), None);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn set_quota_matches_database_case_insensitively() {
     let context = TestAdminContext::new();
     // Mixed-case config name; user supplies all lowercase (parser lowercases).

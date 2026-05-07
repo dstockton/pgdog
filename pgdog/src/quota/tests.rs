@@ -649,6 +649,123 @@ fn test_collect_targets_sorted_user_fallback() {
 }
 
 #[test]
+fn test_collect_targets_uses_general_default_when_db_unset() {
+    // db has no max_db_size; general.default_max_db_size kicks in.
+    let mut cfg = make_config_with_databases(
+        vec![make_db("inherits", "pg1", None)],
+        vec![make_user("app", "pw")],
+    );
+    cfg.config.general.default_max_db_size = Some(2_000_000);
+    with_config_and_clean_state(cfg, || {
+        let targets = collect_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].pool_name, "inherits");
+        assert_eq!(targets[0].max_size, 2_000_000);
+    });
+}
+
+#[test]
+fn test_collect_targets_per_db_overrides_general_default() {
+    // Per-db value wins over the global default.
+    let mut cfg = make_config_with_databases(
+        vec![make_db("explicit", "pg1", Some(500))],
+        vec![make_user("app", "pw")],
+    );
+    cfg.config.general.default_max_db_size = Some(9_999_999);
+    with_config_and_clean_state(cfg, || {
+        let targets = collect_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].max_size, 500);
+    });
+}
+
+#[test]
+fn test_collect_targets_per_db_zero_disables_even_with_general_default() {
+    // Some(0) at the db level explicitly disables enforcement, regardless
+    // of any general default. This lets operators carve out exemptions.
+    let mut cfg = make_config_with_databases(
+        vec![
+            make_db("opt_out", "pg1", Some(0)),
+            make_db("inherits", "pg2", None),
+        ],
+        vec![make_user("app", "pw")],
+    );
+    cfg.config.general.default_max_db_size = Some(1_000_000);
+    with_config_and_clean_state(cfg, || {
+        let targets = collect_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].pool_name, "inherits");
+        assert_eq!(targets[0].max_size, 1_000_000);
+    });
+}
+
+#[test]
+fn test_collect_targets_general_default_zero_is_disabled() {
+    // Explicit zero on the general default behaves like None.
+    let mut cfg = make_config_with_databases(
+        vec![make_db("orphan", "pg1", None)],
+        vec![make_user("app", "pw")],
+    );
+    cfg.config.general.default_max_db_size = Some(0);
+    with_config_and_clean_state(cfg, || {
+        let targets = collect_targets();
+        assert!(targets.is_empty());
+    });
+}
+
+#[test]
+fn test_clear_override_snaps_to_general_default() {
+    // db has no per-db limit but inherits the general default; after
+    // clearing a runtime override, max_size should revert to the default.
+    let db = make_db("inheriting_db", "127.0.0.1", None);
+    let user = pgdog_config::User {
+        name: "alice".into(),
+        database: "inheriting_db".into(),
+        password: Some("secret".into()),
+        ..Default::default()
+    };
+    let mut cfg = make_config_with_databases(vec![db], vec![user]);
+    cfg.config.general.default_max_db_size = Some(750_000);
+
+    with_config_and_clean_state(cfg, || {
+        let mut state = HashMap::new();
+        state.insert(
+            "inheriting_db".to_string(),
+            QuotaStatus {
+                database: "inheriting_db".to_string(),
+                current_size: 400_000,
+                max_size: 750_000,
+                over_limit: false,
+            },
+        );
+        QUOTA_STATE.store(Arc::new(state));
+
+        set_quota_override("inheriting_db", 100_000);
+        assert_eq!(quota_status("inheriting_db").unwrap().max_size, 100_000);
+
+        clear_quota_override("inheriting_db");
+        let after = quota_status("inheriting_db").unwrap();
+        assert_eq!(after.max_size, 750_000);
+        assert!(!after.over_limit);
+    });
+}
+
+#[test]
+fn test_config_default_max_db_size_optional() {
+    let general = pgdog_config::General::default();
+    assert_eq!(general.default_max_db_size, None);
+}
+
+#[test]
+fn test_config_default_max_db_size_parses() {
+    let toml_str = r#"
+        default_max_db_size = 5368709120
+    "#;
+    let general: pgdog_config::General = toml::from_str(toml_str).unwrap();
+    assert_eq!(general.default_max_db_size, Some(5_368_709_120));
+}
+
+#[test]
 fn test_collect_targets_multiple_databases() {
     let cfg = make_config_with_databases(
         vec![

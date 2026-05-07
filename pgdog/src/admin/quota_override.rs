@@ -29,9 +29,11 @@ pub struct ResetQuota {
 ///
 /// Errors:
 /// - `UnknownDatabase` if no configured database matches.
-/// - `QuotaNotConfigured` if matching databases exist but none have
-///   a non-zero `max_db_size`. The monitor ignores such databases,
-///   so silently accepting the override would mislead operators.
+/// - `QuotaNotConfigured` if matching databases exist but none would
+///   be polled by the monitor — i.e. neither `max_db_size` nor an
+///   inherited non-zero `default_max_db_size` applies, or every
+///   matching entry sets `max_db_size = 0` to opt out. Silently
+///   accepting the override would mislead operators.
 /// - `AmbiguousDatabase` if two or more configured databases share
 ///   the requested name case-insensitively but use distinct case-
 ///   preserved names. Override would have to target one specific
@@ -40,6 +42,7 @@ pub struct ResetQuota {
 ///   primary+replica pairs) are fine — they resolve to one key.
 fn resolve_quota_database(requested: &str) -> Result<String, Error> {
     let cfg = crate::config::config();
+    let general_default = cfg.config.general.default_max_db_size;
 
     // Collect distinct case-preserved names that match case-insensitively.
     let mut distinct_names: Vec<String> = Vec::new();
@@ -51,7 +54,15 @@ fn resolve_quota_database(requested: &str) -> Result<String, Error> {
         if !distinct_names.iter().any(|n| n == &db.name) {
             distinct_names.push(db.name.clone());
         }
-        if db.max_db_size.map_or(false, |s| s > 0) {
+        // Same effective-limit logic as quota::collect_targets:
+        // per-db wins (Some(0) explicitly disables), otherwise inherit
+        // general.default_max_db_size when it's set and non-zero.
+        let effective = match db.max_db_size {
+            Some(0) => None,
+            Some(s) => Some(s),
+            None => general_default.filter(|&s| s > 0),
+        };
+        if effective.is_some() {
             has_quota = true;
         }
     }
