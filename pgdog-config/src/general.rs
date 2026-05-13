@@ -233,6 +233,11 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_server_ca_certificate
     pub tls_server_ca_certificate: Option<PathBuf>,
 
+    /// Path to a certificate bundle used to validate the client certificate on TLS connection creation.
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate
+    pub tls_client_ca_certificate: Option<PathBuf>,
+
     /// How long to wait for active clients to finish transactions when shutting down.
     ///
     /// _Default:_ `60000`
@@ -405,6 +410,18 @@ pub struct General {
     /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime
     #[serde(default = "General::server_lifetime")]
     pub server_lifetime: u64,
+
+    /// Maximum random adjustment applied to `server_lifetime` per backend
+    /// connection, in milliseconds. Each connection's effective lifetime
+    /// is sampled uniformly from `[server_lifetime - jitter,
+    /// server_lifetime + jitter]` once at creation time, breaking up
+    /// synchronized cohorts that would otherwise expire together.
+    ///
+    /// _Default:_ `0` (no jitter; existing behavior).
+    ///
+    /// https://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter
+    #[serde(default = "General::server_lifetime_jitter")]
+    pub server_lifetime_jitter: u64,
 
     /// How many transactions can wait while the mirror database processes previous requests.
     ///
@@ -758,6 +775,7 @@ impl Default for General {
             tls_client_required: bool::default(),
             tls_verify: Self::default_tls_verify(),
             tls_server_ca_certificate: Self::tls_server_ca_certificate(),
+            tls_client_ca_certificate: Self::tls_client_ca_certificate(),
             shutdown_timeout: Self::default_shutdown_timeout(),
             shutdown_termination_timeout: Self::default_shutdown_termination_timeout(),
             broadcast_address: Self::broadcast_address(),
@@ -804,6 +822,7 @@ impl Default for General {
                 Self::two_phase_commit_wal_checkpoint_interval(),
             expanded_explain: Self::expanded_explain(),
             server_lifetime: Self::server_lifetime(),
+            server_lifetime_jitter: Self::server_lifetime_jitter(),
             stats_period: Self::stats_period(),
             connection_recovery: Self::connection_recovery(),
             client_connection_recovery: Self::client_connection_recovery(),
@@ -1139,6 +1158,10 @@ impl General {
         Self::env_option_string("PGDOG_TLS_SERVER_CA_CERTIFICATE").map(PathBuf::from)
     }
 
+    fn tls_client_ca_certificate() -> Option<PathBuf> {
+        Self::env_option_string("PGDOG_TLS_CLIENT_CA_CERTIFICATE").map(PathBuf::from)
+    }
+
     fn query_log() -> Option<PathBuf> {
         Self::env_option_string("PGDOG_QUERY_LOG").map(PathBuf::from)
     }
@@ -1234,6 +1257,10 @@ impl General {
             "PGDOG_SERVER_LIFETIME",
             Duration::from_secs(3600 * 24).as_millis() as u64,
         )
+    }
+
+    pub fn server_lifetime_jitter() -> u64 {
+        Self::env_or_default("PGDOG_SERVER_LIFETIME_JITTER", 0)
     }
 
     pub fn connection_recovery() -> ConnectionRecovery {
@@ -1489,6 +1516,7 @@ mod tests {
         env::set_var("PGDOG_TLS_CERTIFICATE", "/path/to/cert.pem");
         env::set_var("PGDOG_TLS_PRIVATE_KEY", "/path/to/key.pem");
         env::set_var("PGDOG_TLS_SERVER_CA_CERTIFICATE", "/path/to/ca.pem");
+        env::set_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE", "/path/to/client-ca.pem");
         env::set_var("PGDOG_QUERY_LOG", "/var/log/pgdog/queries.log");
 
         assert_eq!(
@@ -1504,6 +1532,10 @@ mod tests {
             Some(PathBuf::from("/path/to/ca.pem"))
         );
         assert_eq!(
+            General::tls_client_ca_certificate(),
+            Some(PathBuf::from("/path/to/client-ca.pem"))
+        );
+        assert_eq!(
             General::query_log(),
             Some(PathBuf::from("/var/log/pgdog/queries.log"))
         );
@@ -1511,11 +1543,13 @@ mod tests {
         env::remove_var("PGDOG_TLS_CERTIFICATE");
         env::remove_var("PGDOG_TLS_PRIVATE_KEY");
         env::remove_var("PGDOG_TLS_SERVER_CA_CERTIFICATE");
+        env::remove_var("PGDOG_TLS_CLIENT_CA_CERTIFICATE");
         env::remove_var("PGDOG_QUERY_LOG");
 
         assert_eq!(General::tls_certificate(), None);
         assert_eq!(General::tls_private_key(), None);
         assert_eq!(General::tls_server_ca_certificate(), None);
+        assert_eq!(General::tls_client_ca_certificate(), None);
         assert_eq!(General::query_log(), None);
     }
 

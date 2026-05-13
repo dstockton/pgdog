@@ -97,11 +97,13 @@
         "resharding_parallel_copies": 1,
         "rollback_timeout": 5000,
         "server_lifetime": 86400000,
+        "server_lifetime_jitter": 0,
         "shutdown_termination_timeout": null,
         "shutdown_timeout": 60000,
         "stats_period": 15000,
         "system_catalogs": "omnisharded_sticky",
         "tls_certificate": null,
+        "tls_client_ca_certificate": null,
         "tls_client_required": false,
         "tls_private_key": null,
         "tls_server_ca_certificate": null,
@@ -469,6 +471,15 @@
         },
         "server_lifetime": {
           "description": "Overrides the `server_lifetime` setting. Server connections older than this will be closed when returned to the pool.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "server_lifetime_jitter": {
+          "description": "Overrides the `server_lifetime_jitter` setting for this database.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/databases/#server_lifetime_jitter",
           "type": [
             "integer",
             "null"
@@ -1016,6 +1027,13 @@
           "default": 86400000,
           "minimum": 0
         },
+        "server_lifetime_jitter": {
+          "description": "Maximum random adjustment applied to `server_lifetime` per backend\nconnection, in milliseconds. Each connection's effective lifetime\nis sampled uniformly from `[server_lifetime - jitter,\nserver_lifetime + jitter]` once at creation time, breaking up\nsynchronized cohorts that would otherwise expire together.\n\n_Default:_ `0` (no jitter; existing behavior).\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#server_lifetime_jitter",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "shutdown_termination_timeout": {
           "description": "How long to wait for active connections to be forcibly terminated after `shutdown_timeout` expires.\n\n**Note:** If set, PgDog will send `CANCEL` requests to PostgreSQL for any remaining active queries before tearing down connection pools.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#shutdown_termination_timeout",
           "type": [
@@ -1047,6 +1065,13 @@
         },
         "tls_certificate": {
           "description": "Path to the TLS certificate PgDog will use to setup TLS connections with clients.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_certificate",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_client_ca_certificate": {
+          "description": "Path to a certificate bundle used to validate the client certificate on TLS connection creation.\n\nhttps://docs.pgdog.dev/configuration/pgdog.toml/general/#tls_client_ca_certificate",
           "type": [
             "string",
             "null"
